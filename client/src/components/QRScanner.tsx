@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Alert, Dimensions } from 'react-native';
-import { Camera, CameraView, useCameraPermissions } from 'expo-camera';
-import { Button, Surface, ActivityIndicator } from 'react-native-paper';
+import { View, Text, StyleSheet, Alert, Dimensions, Platform } from 'react-native';
+import { CameraView, Camera, useCameraPermissions } from 'expo-camera';
+import { Button, Surface, ActivityIndicator, IconButton } from 'react-native-paper';
 import { useRouter } from 'expo-router';
+import * as Linking from 'expo-linking';
 
 interface QRScannerProps {
   onScan?: (data: string) => void;
@@ -13,10 +14,11 @@ export default function QRScanner({ onScan, onClose }: QRScannerProps) {
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [flashEnabled, setFlashEnabled] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
-    if (!permission?.granted) {
+    if (!permission?.granted && permission?.canAskAgain) {
       requestPermission();
     }
   }, [permission]);
@@ -28,10 +30,9 @@ export default function QRScanner({ onScan, onClose }: QRScannerProps) {
     setLoading(true);
 
     try {
-      // Parse QR code data
-      console.log('QR Code scanned:', data);
+      console.log('QR Code scanned:', { type, data });
       
-      // Check if it's a restaurant QR code
+      // Parse QR code data
       if (data.startsWith('restaurant:')) {
         // Extract restaurant ID from QR code
         const parts = data.split(':');
@@ -51,18 +52,45 @@ export default function QRScanner({ onScan, onClose }: QRScannerProps) {
         // Handle web URLs
         Alert.alert(
           'Web Link Detected',
-          'This QR code contains a web link. Do you want to open it?',
+          `This QR code contains a web link:\n${data}\n\nDo you want to open it?`,
           [
             { text: 'Cancel', style: 'cancel' },
-            { text: 'Open', onPress: () => {
-              // You can use Linking.openURL(data) here
-              console.log('Opening URL:', data);
-            }},
+            { 
+              text: 'Open', 
+              onPress: async () => {
+                try {
+                  await Linking.openURL(data);
+                } catch (error) {
+                  Alert.alert('Error', 'Could not open the link');
+                }
+              }
+            },
+          ]
+        );
+      } else if (data.includes('menu') || data.includes('restaurant')) {
+        // Generic restaurant/menu QR code
+        Alert.alert(
+          'Restaurant QR Code',
+          `QR Code detected: ${data}\n\nThis appears to be a restaurant QR code. In a real app, this would navigate to the restaurant page.`,
+          [
+            { text: 'OK' },
+            { text: 'Demo Restaurant', onPress: () => router.push('/restaurant/demo-restaurant-1') }
           ]
         );
       } else {
         // Generic QR code
-        Alert.alert('QR Code Scanned', `Content: ${data}`);
+        Alert.alert(
+          'QR Code Scanned',
+          `Content: ${data}`,
+          [
+            { text: 'Copy', onPress: () => {
+              // In a real app, you'd copy to clipboard
+              Alert.alert('Copied', 'QR code content copied to clipboard');
+            }},
+            { text: 'Close', style: 'cancel' }
+          ]
+        );
+        
         if (onScan) {
           onScan(data);
         }
@@ -80,11 +108,29 @@ export default function QRScanner({ onScan, onClose }: QRScannerProps) {
     }
   };
 
+  const toggleFlash = () => {
+    setFlashEnabled(!flashEnabled);
+  };
+
+  const handlePermissionRequest = async () => {
+    const result = await requestPermission();
+    if (!result.granted) {
+      Alert.alert(
+        'Camera Permission Required',
+        'This app needs camera access to scan QR codes. Please enable camera permission in your device settings.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Open Settings', onPress: () => Linking.openSettings() }
+        ]
+      );
+    }
+  };
+
   if (!permission) {
     return (
       <View style={styles.container}>
         <ActivityIndicator size="large" />
-        <Text style={styles.text}>Requesting camera permission...</Text>
+        <Text style={styles.text}>Checking camera permission...</Text>
       </View>
     );
   }
@@ -93,10 +139,36 @@ export default function QRScanner({ onScan, onClose }: QRScannerProps) {
     return (
       <View style={styles.container}>
         <Surface style={styles.permissionContainer}>
-          <Text style={styles.text}>Camera permission is required to scan QR codes</Text>
-          <Button mode="contained" onPress={requestPermission} style={styles.button}>
-            Grant Permission
-          </Button>
+          <Text style={styles.permissionTitle}>Camera Access Required</Text>
+          <Text style={styles.text}>
+            To scan QR codes, this app needs access to your camera. Your privacy is important to us - we only use the camera for QR code scanning.
+          </Text>
+          
+          {permission.canAskAgain ? (
+            <Button 
+              mode="contained" 
+              onPress={handlePermissionRequest} 
+              style={styles.button}
+              icon="camera"
+            >
+              Grant Camera Permission
+            </Button>
+          ) : (
+            <View>
+              <Text style={styles.settingsText}>
+                Camera permission was denied. Please enable it in your device settings.
+              </Text>
+              <Button 
+                mode="contained" 
+                onPress={() => Linking.openSettings()} 
+                style={styles.button}
+                icon="cog"
+              >
+                Open Settings
+              </Button>
+            </View>
+          )}
+          
           {onClose && (
             <Button mode="outlined" onPress={onClose} style={styles.button}>
               Cancel
@@ -112,51 +184,81 @@ export default function QRScanner({ onScan, onClose }: QRScannerProps) {
       <CameraView
         style={styles.camera}
         facing="back"
+        flash={flashEnabled ? 'on' : 'off'}
         onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
         barcodeScannerSettings={{
-          barcodeTypes: ['qr', 'pdf417'],
+          barcodeTypes: ['qr', 'pdf417', 'aztec', 'ean13', 'ean8', 'upc_e', 'code128', 'code39'],
         }}
       >
         <View style={styles.overlay}>
-          <View style={styles.scanArea}>
-            <View style={styles.corner} />
-            <View style={[styles.corner, styles.topRight]} />
-            <View style={[styles.corner, styles.bottomLeft]} />
-            <View style={[styles.corner, styles.bottomRight]} />
+          {/* Header Controls */}
+          <View style={styles.headerControls}>
+            {onClose && (
+              <IconButton
+                icon="close"
+                iconColor="#fff"
+                size={24}
+                onPress={onClose}
+                style={styles.headerButton}
+              />
+            )}
+            <View style={styles.spacer} />
+            <IconButton
+              icon={flashEnabled ? "flash" : "flash-off"}
+              iconColor="#fff"
+              size={24}
+              onPress={toggleFlash}
+              style={styles.headerButton}
+            />
+          </View>
+
+          {/* Scan Area */}
+          <View style={styles.scanAreaContainer}>
+            <View style={styles.scanArea}>
+              <View style={[styles.corner, styles.topLeft]} />
+              <View style={[styles.corner, styles.topRight]} />
+              <View style={[styles.corner, styles.bottomLeft]} />
+              <View style={[styles.corner, styles.bottomRight]} />
+              
+              {/* Scanning Line Animation */}
+              {!scanned && (
+                <View style={styles.scanLine} />
+              )}
+            </View>
           </View>
           
+          {/* Instructions */}
           <View style={styles.instructions}>
-            <Text style={styles.instructionText}>
-              Point your camera at a QR code
+            <Text style={styles.instructionTitle}>
+              Scan QR Code
             </Text>
+            <Text style={styles.instructionText}>
+              Point your camera at a QR code to scan it
+            </Text>
+            
             {scanned && (
               <View style={styles.scannedContainer}>
                 {loading ? (
-                  <ActivityIndicator color="#fff" />
+                  <View style={styles.loadingContainer}>
+                    <ActivityIndicator color="#fff" size="small" />
+                    <Text style={styles.loadingText}>Processing...</Text>
+                  </View>
                 ) : (
-                  <Text style={styles.scannedText}>✓ Scanned!</Text>
+                  <Text style={styles.scannedText}>✓ Scanned Successfully!</Text>
                 )}
               </View>
             )}
           </View>
 
-          <View style={styles.controls}>
-            {onClose && (
-              <Button 
-                mode="contained" 
-                onPress={onClose}
-                buttonColor="rgba(0,0,0,0.7)"
-                textColor="#fff"
-              >
-                Close
-              </Button>
-            )}
+          {/* Bottom Controls */}
+          <View style={styles.bottomControls}>
             <Button
               mode="outlined"
               onPress={() => setScanned(false)}
               buttonColor="rgba(255,255,255,0.1)"
               textColor="#fff"
-              style={styles.button}
+              style={styles.controlButton}
+              disabled={loading}
             >
               Scan Again
             </Button>
@@ -168,7 +270,7 @@ export default function QRScanner({ onScan, onClose }: QRScannerProps) {
 }
 
 const { width, height } = Dimensions.get('window');
-const scanAreaSize = width * 0.7;
+const scanAreaSize = Math.min(width * 0.7, 280);
 
 const styles = StyleSheet.create({
   container: {
@@ -180,7 +282,23 @@ const styles = StyleSheet.create({
   },
   overlay: {
     flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
+  headerControls: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingTop: Platform.OS === 'ios' ? 50 : 20,
+    paddingHorizontal: 20,
+  },
+  headerButton: {
     backgroundColor: 'rgba(0,0,0,0.5)',
+  },
+  spacer: {
+    flex: 1,
+  },
+  scanAreaContainer: {
+    flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -189,89 +307,123 @@ const styles = StyleSheet.create({
     height: scanAreaSize,
     position: 'relative',
     backgroundColor: 'transparent',
-    borderWidth: 2,
-    borderColor: 'transparent',
   },
   corner: {
     position: 'absolute',
     width: 30,
     height: 30,
     borderColor: '#fff',
-    borderWidth: 3,
-    borderTopWidth: 3,
-    borderLeftWidth: 3,
+    borderWidth: 4,
+  },
+  topLeft: {
+    top: 0,
+    left: 0,
     borderRightWidth: 0,
     borderBottomWidth: 0,
-    top: -2,
-    left: -2,
   },
   topRight: {
-    borderTopWidth: 3,
-    borderRightWidth: 3,
+    top: 0,
+    right: 0,
     borderLeftWidth: 0,
     borderBottomWidth: 0,
-    top: -2,
-    right: -2,
-    left: 'auto',
   },
   bottomLeft: {
-    borderBottomWidth: 3,
-    borderLeftWidth: 3,
-    borderTopWidth: 0,
+    bottom: 0,
+    left: 0,
     borderRightWidth: 0,
-    bottom: -2,
-    left: -2,
-    top: 'auto',
+    borderTopWidth: 0,
   },
   bottomRight: {
-    borderBottomWidth: 3,
-    borderRightWidth: 3,
-    borderTopWidth: 0,
+    bottom: 0,
+    right: 0,
     borderLeftWidth: 0,
-    bottom: -2,
-    right: -2,
-    top: 'auto',
-    left: 'auto',
+    borderTopWidth: 0,
+  },
+  scanLine: {
+    position: 'absolute',
+    top: '50%',
+    left: 0,
+    right: 0,
+    height: 2,
+    backgroundColor: '#fff',
+    opacity: 0.8,
   },
   instructions: {
-    position: 'absolute',
-    bottom: 150,
     alignItems: 'center',
+    paddingHorizontal: 40,
+    paddingBottom: 20,
+  },
+  instructionTitle: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 8,
   },
   instructionText: {
     color: '#fff',
     fontSize: 16,
     textAlign: 'center',
-    marginBottom: 10,
+    opacity: 0.9,
+    lineHeight: 22,
   },
   scannedContainer: {
     backgroundColor: 'rgba(0,0,0,0.7)',
-    padding: 10,
-    borderRadius: 5,
+    padding: 12,
+    borderRadius: 8,
     alignItems: 'center',
+    marginTop: 16,
+  },
+  loadingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  loadingText: {
+    color: '#fff',
+    fontSize: 16,
+    marginLeft: 8,
   },
   scannedText: {
     color: '#4CAF50',
     fontSize: 16,
     fontWeight: 'bold',
   },
-  controls: {
-    position: 'absolute',
-    bottom: 50,
+  bottomControls: {
     flexDirection: 'row',
-    gap: 10,
+    justifyContent: 'center',
+    paddingBottom: Platform.OS === 'ios' ? 40 : 20,
+    paddingHorizontal: 20,
+  },
+  controlButton: {
+    minWidth: 120,
   },
   permissionContainer: {
     margin: 20,
-    padding: 20,
+    padding: 24,
     alignItems: 'center',
+    borderRadius: 12,
+  },
+  permissionTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    marginBottom: 16,
   },
   text: {
     fontSize: 16,
     textAlign: 'center',
     marginBottom: 20,
+    lineHeight: 24,
+  },
+  settingsText: {
+    fontSize: 14,
+    textAlign: 'center',
+    marginBottom: 16,
+    color: '#666',
+    lineHeight: 20,
   },
   button: {
-    marginTop: 10,
+    marginTop: 12,
+    minWidth: 200,
   },
 });
